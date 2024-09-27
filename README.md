@@ -16,15 +16,3 @@ Before running the application, make sure you have the following installed:
 2. **Pygame**: Install the `pygame` library for handling sound playback:
    ```bash
    pip install pygame
-
-    #project-directory
-│
-├── /SoundFiles                 # Directory for sound files
-│   ├── a_major.wav
-│   ├── c_major.wav
-│   ├── d_major.wav
-│   ├── e_major.wav
-│   └── g_major.wav
-│
-├── guitar_chord_player.py      # Main Python script
-├── README.md                   # Project documentation (this file)
