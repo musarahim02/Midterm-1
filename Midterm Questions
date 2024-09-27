@@ -1,0 +1,34 @@
+# Midterm Project Reflection
+
+## Time Spent
+
+Cumulatively, I have spent approximately 20 hours working on the code. This includes time spent on writing the initial code, debugging, adding features, and setting up the test suite.
+
+## Most Time-Consuming Part
+
+The most time-consuming part of the project was debugging and tweking the initioal code from chat GPT. The initial GPT code was really buggy and didn't achieve the goals of the project. I also think that finding the correct sound files, and figuring out how to use those files correctly was pretty difficult.
+
+## Retrospective: How I Could Have Worked More Efficiently
+
+In retrospect, I could have worked more efficiently by spending more time planning out the structure of the application before coding. Specifically:
+- Breaking down tasks: I could have broken down the GUI development and sound-handling code into smaller, more manageable chunks.
+- Automated Testing Early: Incorporating the test suite from the beginning would have helped catch bugs earlier in the development process, especially when binding keys and buttons.
+- Having a baseline code before inputing into chat GPT. 
+
+## Useful Libraries and Starter Code
+
+- **Pygame** was extremely helpful for handling sound playback. I used its `mixer` module extensively to load and play the chord sounds. I did not need to modify this library significantly, as it provides robust functionality for audio handling.
+- **Tkinter** provided an intuitive framework for the GUI. I used it primarily for creating buttons and handling key bindings. Modifications mainly involved customizing the layout and event handling, but Tkinter's built-in capabilities were sufficient for the needs of this project.
+
+## Challenges and Lessons Learned
+
+One of the main challenges was ensuring that the program remained responsive while handling simultaneous button clicks and key presses. Additionally, configuring the test suite to check for correct sound output was tricky, and I had to mock the sound playback for proper testing.
+
+## Testing
+
+The project includes a suite of unit tests that verify:
+- The correct sound files are played when buttons are clicked or keys are pressed.
+- The GUI initializes correctly.
+- The quit button works as expected.
+
+All tests passed, and I verified the functionality manually as well.
