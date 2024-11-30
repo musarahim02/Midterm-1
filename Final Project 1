@@ -5,11 +5,12 @@ from tkinter import messagebox
 import threading
 import time
 
-# Initialize pygame mixer
+# Initialize pygame mixer with mono sound
 SAMPLE_RATE = 44100  # Samples per second
 pygame.mixer.init(frequency=SAMPLE_RATE, size=-16, channels=1)
 
-def generate_tone(frequency, duration=1.0, volume=1.0, waveform='sine', adsr=(0.01, 0.1, 0.8, 0.1)):
+def generate_tone(frequency, duration=1.0, volume=1.0, waveform='sine',
+                  adsr=(0.01, 0.1, 0.8, 0.1)):
     n_samples = int(round(duration * SAMPLE_RATE))
     t = np.linspace(0, duration, n_samples, endpoint=False)
 
@@ -66,46 +67,6 @@ def add_reverb(sound_array, delays, attenuations):
         reverb_wave[delay_samples:] += sound_array[:-delay_samples] * attenuation
     return reverb_wave
 
-def strum_chord(note_names, duration=1.0, volume=1.0, strum_delay=0.1, waveform='sine', adsr=(0.01, 0.1, 0.8, 0.1),
-                effect='None', stop_event=None, playing_channels=None):
-    total_samples = int(duration * SAMPLE_RATE)
-    chord_wave = np.zeros(total_samples)
-    for note in note_names:
-        if stop_event and stop_event.is_set():
-            break
-        freq = note_frequencies.get(note)
-        if freq:
-            freq *= 2 ** app.octave_shift.get()  # Apply octave shift
-            sound = generate_tone(freq, duration, volume, waveform, adsr)
-            sound_array = pygame.sndarray.array(sound)
-            chord_wave[:len(sound_array)] += sound_array.flatten()
-            time.sleep(strum_delay)  # Delay between notes
-        else:
-            messagebox.showerror("Error", f"Frequency for note '{note}' not found.")
-            return
-
-    # Apply effects
-    chord_wave = chord_wave.astype(np.float32)
-    if effect == 'Echo':
-        chord_wave = add_echo(chord_wave, delay=0.2, attenuation=0.6)
-    elif effect == 'Reverb':
-        delays = [0.03, 0.05, 0.07]
-        attenuations = [0.6, 0.4, 0.3]
-        chord_wave = add_reverb(chord_wave, delays, attenuations)
-
-    # Normalize to prevent clipping
-    max_val = np.max(np.abs(chord_wave))
-    if max_val > 0:
-        chord_wave = chord_wave * (32767 / max_val)
-    else:
-        chord_wave = chord_wave * 0
-
-    chord_wave = chord_wave.astype(np.int16)
-    sound = pygame.sndarray.make_sound(chord_wave)
-    channel = sound.play()
-    if playing_channels is not None:
-        playing_channels.append(channel)
-
 # Frequencies for standard musical notes
 note_frequencies = {
     'C': 261.63,
@@ -129,7 +90,9 @@ chord_definitions = {
     'E Major': ['E', 'G#', 'B'],
     'F Major': ['F', 'A', 'C'],
     'G Major': ['G', 'B', 'D'],
+    'A Major': ['A', 'C#', 'E'],
     'A Minor': ['A', 'C', 'E'],
+    'B Minor': ['B', 'D', 'F#'],
     'B Diminished': ['B', 'D', 'F'],
     # Add more chords as needed
 }
@@ -142,22 +105,42 @@ key_to_chord = {
     'F': 'F Major',
     'G': 'G Major',
     'A': 'A Minor',
-    'B': 'B Diminished',
+    'B': 'B Minor',
     # Add more mappings as needed
+}
+
+# Strumming patterns
+strumming_patterns = {
+    'Pattern 1': [('D', 0.0), ('D', 0.5), ('U', 1.0), ('U', 1.5), ('D', 2.0), ('U', 2.5)],
+    'Pattern 2': [('D', 0.0), ('U', 0.4), ('D', 0.8), ('U', 1.2)],
+    'Pattern 3': [('D', 0.0), ('D', 0.3), ('D', 0.6), ('D', 0.9)],
+    # Add more patterns as needed
+}
+
+# Chord progressions
+chord_progressions = {
+    'Progression 1': ['C Major', 'G Major', 'A Minor', 'F Major'],
+    'Progression 2': ['A Minor', 'F Major', 'C Major', 'G Major'],
+    'Progression 3': ['D Major', 'A Major', 'B Minor', 'G Major'],
+    # Add more progressions as needed
 }
 
 class ChordApp:
     def __init__(self, master):
         self.master = master
-        master.title("Chord Player with Strumming and Effects")
+        master.title("Chord Player with Strumming and Custom Progressions")
 
-        # Bind key press event to the main window
-        master.bind('<Key>', self.key_pressed)
+        # Bind key press and key release events to the main window
+        master.bind('<KeyPress>', self.key_pressed)
+        master.bind('<KeyRelease>', self.key_released)
+
+        # Set of currently pressed keys
+        self.pressed_keys = set()
 
         # Strum delay variable
-        self.strum_delay = tk.DoubleVar(value=0.1)  # Default strum delay in seconds
+        self.strum_delay = tk.DoubleVar(value=0.2)  # Default strum delay in seconds
         # Note duration variable
-        self.note_duration = tk.DoubleVar(value=2.0)  # Default note duration in seconds
+        self.note_duration = tk.DoubleVar(value=1.0)  # Default note duration in seconds
         # Waveform variable
         self.waveform = tk.StringVar(value='sine')
         # Octave shift variable
@@ -166,21 +149,35 @@ class ChordApp:
         self.effect = tk.StringVar(value='None')
 
         # Variables to manage chord playing
-        self.current_strum_thread = None
-        self.stop_strum_event = threading.Event()
-        self.playing_channels = []
+        # Map from keys to chord data
+        self.playing_chords = {}  # key -> {'thread', 'stop_event', 'channels'}
+
+        # Variables for strumming progression
+        self.is_playing_progression = False
+        self.progression_thread = None
+        self.stop_progression_event = threading.Event()
+
+        # Custom progression
+        self.custom_progression = []
+        self.custom_progression_label = None
 
         # Create buttons for each chord
+        self.chord_buttons = {}
         for i, (key, chord_name) in enumerate(key_to_chord.items()):
             btn = tk.Button(master, text=chord_name, width=15, height=2,
-                            command=lambda cn=chord_name: self.play_chord(cn))
+                            command=lambda cn=chord_name: self.play_chord(cn, key='BUTTON'))
             btn.grid(row=0, column=i, padx=5, pady=5)
+            self.chord_buttons[chord_name] = btn
+
+            # Bind right-click and double-click events to add chord to custom progression
+            btn.bind('<Button-3>', lambda event, cn=chord_name: self.add_to_custom_progression(cn))
+            btn.bind('<Double-Button-1>', lambda event, cn=chord_name: self.add_to_custom_progression(cn))
 
         # Strum speed control
         strum_label = tk.Label(master, text="Strum Speed (Delay in seconds):")
         strum_label.grid(row=1, column=0, columnspan=2)
 
-        strum_scale = tk.Scale(master, from_=0.02, to=0.2, resolution=0.01,
+        strum_scale = tk.Scale(master, from_=0.05, to=0.5, resolution=0.05,
                                orient=tk.HORIZONTAL, variable=self.strum_delay)
         strum_scale.grid(row=1, column=2, columnspan=2)
 
@@ -188,7 +185,7 @@ class ChordApp:
         duration_label = tk.Label(master, text="Note Duration (seconds):")
         duration_label.grid(row=2, column=0, columnspan=2)
 
-        duration_scale = tk.Scale(master, from_=1.0, to=5.0, resolution=0.5,
+        duration_scale = tk.Scale(master, from_=0.5, to=2.0, resolution=0.1,
                                   orient=tk.HORIZONTAL, variable=self.note_duration)
         duration_scale.grid(row=2, column=2, columnspan=2)
 
@@ -211,52 +208,269 @@ class ChordApp:
         effect_menu = tk.OptionMenu(master, self.effect, 'None', 'Echo', 'Reverb')
         effect_menu.grid(row=4, column=1)
 
+        # Strumming pattern selection
+        pattern_label = tk.Label(master, text="Strumming Pattern:")
+        pattern_label.grid(row=5, column=0)
+        self.selected_pattern = tk.StringVar(value='Pattern 1')
+        pattern_menu = tk.OptionMenu(master, self.selected_pattern, *strumming_patterns.keys())
+        pattern_menu.grid(row=5, column=1)
+
+        # Chord progression selection
+        progression_label = tk.Label(master, text="Chord Progression:")
+        progression_label.grid(row=5, column=2)
+        self.selected_progression = tk.StringVar(value='Custom Progression')
+        progression_menu = tk.OptionMenu(master, self.selected_progression, 'Custom Progression', *chord_progressions.keys())
+        progression_menu.grid(row=5, column=3)
+
+        # Custom progression display
+        self.custom_progression_label = tk.Label(master, text="Custom Progression: (Right-click or double-click chords to add)")
+        self.custom_progression_label.grid(row=6, column=0, columnspan=4)
+
+        # Start/Stop progression button
+        self.progression_btn = tk.Button(master, text="Start Progression", width=15, height=2,
+                                         command=self.toggle_progression)
+        self.progression_btn.grid(row=7, column=1, columnspan=2, pady=10)
+
+        # Clear custom progression button
+        clear_btn = tk.Button(master, text="Clear Custom Progression", width=20, height=2,
+                              command=self.clear_custom_progression)
+        clear_btn.grid(row=8, column=1, columnspan=2, pady=5)
+
         # Create quit button
         quit_btn = tk.Button(master, text="Quit", width=10, height=2,
                              command=master.quit)
-        quit_btn.grid(row=5, column=len(key_to_chord)//2, pady=10)
+        quit_btn.grid(row=9, column=len(key_to_chord)//2, pady=10)
 
-    def play_chord(self, chord_name):
+    def play_chord(self, chord_name, key):
         note_names = chord_definitions.get(chord_name)
         if note_names:
-            # Stop previous chord if any
-            if self.current_strum_thread and self.current_strum_thread.is_alive():
-                self.stop_strum_event.set()
-                self.current_strum_thread.join()
-                # Stop all playing channels
-                for channel in self.playing_channels:
-                    channel.stop()
-                self.playing_channels.clear()
-                self.stop_strum_event.clear()
+            # Stop previous chord associated with this key
+            if key in self.playing_chords:
+                self.stop_chord(key)
+            # Set up for new chord
+            stop_event = threading.Event()
+            playing_channels = []
             strum_delay = self.strum_delay.get()
             note_duration = self.note_duration.get()
             waveform = self.waveform.get()
             effect = self.effect.get()
             # Start new chord
-            self.current_strum_thread = threading.Thread(
-                target=strum_chord,
-                args=(note_names,),
+            strum_thread = threading.Thread(
+                target=self.strum_chord_single,
+                args=(note_names, stop_event, playing_channels),
                 kwargs={
                     'duration': note_duration,
                     'volume': 1.0,
                     'strum_delay': strum_delay,
                     'waveform': waveform,
                     'effect': effect,
-                    'stop_event': self.stop_strum_event,
-                    'playing_channels': self.playing_channels
                 }
             )
-            self.current_strum_thread.start()
+            strum_thread.start()
+            # Store the chord data
+            self.playing_chords[key] = {
+                'thread': strum_thread,
+                'stop_event': stop_event,
+                'channels': playing_channels
+            }
         else:
             messagebox.showerror("Error", f"Chord '{chord_name}' not found.")
 
-    def key_pressed(self, event):
-        key = event.char.upper()
-        chord_name = key_to_chord.get(key)
-        if chord_name:
-            self.play_chord(chord_name)
+    def strum_chord_single(self, note_names, stop_event, playing_channels, duration, volume, strum_delay, waveform, effect):
+        total_samples = int(duration * SAMPLE_RATE)
+        chord_wave = np.zeros(total_samples)
+        for note in note_names:
+            if stop_event.is_set():
+                break
+            freq = note_frequencies.get(note)
+            if freq:
+                freq *= 2 ** self.octave_shift.get()  # Apply octave shift
+                sound = generate_tone(freq, duration, volume, waveform)
+                sound_array = pygame.sndarray.array(sound)
+                chord_wave[:len(sound_array)] += sound_array.flatten()
+                time.sleep(strum_delay)  # Delay between notes
+            else:
+                self.master.after(0, lambda n=note: messagebox.showerror("Error", f"Frequency for note '{n}' not found."))
+                return
+
+        # Apply effects
+        chord_wave = chord_wave.astype(np.float32)
+        if effect == 'Echo':
+            chord_wave = add_echo(chord_wave, delay=0.2, attenuation=0.6)
+        elif effect == 'Reverb':
+            delays = [0.03, 0.05, 0.07]
+            attenuations = [0.6, 0.4, 0.3]
+            chord_wave = add_reverb(chord_wave, delays, attenuations)
+
+        # Normalize to prevent clipping
+        max_val = np.max(np.abs(chord_wave))
+        if max_val > 0:
+            chord_wave = chord_wave * (32767 / max_val)
         else:
-            pass  # Ignore unassigned keys
+            chord_wave = chord_wave * 0
+
+        chord_wave = chord_wave.astype(np.int16)
+        sound = pygame.sndarray.make_sound(chord_wave)
+        channel = sound.play()
+        playing_channels.append(channel)
+        # Wait for the sound to finish or until stop_event is set
+        while channel.get_busy():
+            if stop_event.is_set():
+                channel.stop()
+                break
+            pygame.time.wait(10)
+
+    def stop_chord(self, key):
+        chord_data = self.playing_chords.get(key)
+        if chord_data:
+            # Signal the thread to stop
+            chord_data['stop_event'].set()
+            # Do not join the thread here to avoid blocking
+            # Stop all playing channels
+            for channel in chord_data['channels']:
+                channel.stop()
+            del self.playing_chords[key]
+
+    def key_pressed(self, event):
+        key = event.keysym.upper()
+        if key not in self.pressed_keys:
+            self.pressed_keys.add(key)
+            chord_name = key_to_chord.get(key)
+            if chord_name:
+                self.play_chord(chord_name, key)
+
+    def key_released(self, event):
+        key = event.keysym.upper()
+        if key in self.pressed_keys:
+            self.pressed_keys.remove(key)
+            chord_name = key_to_chord.get(key)
+            if chord_name:
+                self.stop_chord(key)
+
+    def toggle_progression(self):
+        if not self.is_playing_progression:
+            # Start progression
+            self.is_playing_progression = True
+            self.progression_btn.config(text="Stop Progression")
+            self.stop_progression_event.clear()
+            self.progression_thread = threading.Thread(target=self.play_strumming_progression)
+            self.progression_thread.start()
+        else:
+            # Stop progression
+            self.is_playing_progression = False
+            self.progression_btn.config(text="Start Progression")
+            self.stop_progression_event.set()
+            # Do not call join() here to avoid blocking the GUI thread
+
+    def play_strumming_progression(self):
+        progression_name = self.selected_progression.get()
+        pattern_name = self.selected_pattern.get()
+
+        if progression_name == 'Custom Progression':
+            chord_list = self.custom_progression
+            if not chord_list:
+                self.master.after(0, lambda: messagebox.showerror("Error", "Custom progression is empty."))
+                self.master.after(0, self.on_progression_end)
+                return
+        else:
+            chord_list = chord_progressions.get(progression_name, [])
+
+        pattern = strumming_patterns.get(pattern_name, [])
+        if not chord_list or not pattern:
+            self.master.after(0, lambda: messagebox.showerror("Error", "Invalid progression or pattern."))
+            self.master.after(0, self.on_progression_end)
+            return
+
+        # Retrieve settings
+        waveform = self.waveform.get()
+        effect = self.effect.get()
+        volume = 1.0
+        octave_shift = self.octave_shift.get()
+        note_duration = self.note_duration.get()
+
+        # Calculate total pattern duration
+        pattern_times = [time_offset for _, time_offset in pattern]
+        pattern_duration = max(pattern_times) + note_duration
+
+        try:
+            while not self.stop_progression_event.is_set():
+                for chord_name in chord_list:
+                    if self.stop_progression_event.is_set():
+                        break
+                    note_names = chord_definitions.get(chord_name)
+                    if note_names:
+                        # Prepare chord sound
+                        chord_wave = np.zeros(int(pattern_duration * SAMPLE_RATE))
+                        for strum_direction, time_offset in pattern:
+                            if self.stop_progression_event.is_set():
+                                break
+                            for note in note_names:
+                                freq = note_frequencies.get(note)
+                                if freq:
+                                    freq *= 2 ** octave_shift  # Apply octave shift
+                                    sound = generate_tone(freq, note_duration, volume, waveform)
+                                    sound_array = pygame.sndarray.array(sound)
+                                    start_sample = int(time_offset * SAMPLE_RATE)
+                                    end_sample = start_sample + len(sound_array)
+                                    if end_sample > len(chord_wave):
+                                        end_sample = len(chord_wave)
+                                        sound_array = sound_array[:end_sample - start_sample]
+                                    chord_wave[start_sample:end_sample] += sound_array.flatten()
+                                else:
+                                    self.master.after(0, lambda n=note: messagebox.showerror("Error", f"Frequency for note '{n}' not found."))
+                                    self.master.after(0, self.on_progression_end)
+                                    return
+                            # No need to sleep during progression playback
+                        # Apply effects
+                        chord_wave = chord_wave.astype(np.float32)
+                        if effect == 'Echo':
+                            chord_wave = add_echo(chord_wave, delay=0.2, attenuation=0.6)
+                        elif effect == 'Reverb':
+                            delays = [0.03, 0.05, 0.07]
+                            attenuations = [0.6, 0.4, 0.3]
+                            chord_wave = add_reverb(chord_wave, delays, attenuations)
+                        # Normalize to prevent clipping
+                        max_val = np.max(np.abs(chord_wave))
+                        if max_val > 0:
+                            chord_wave = chord_wave * (32767 / max_val)
+                        else:
+                            chord_wave = chord_wave * 0
+                        chord_wave = chord_wave.astype(np.int16)
+                        sound = pygame.sndarray.make_sound(chord_wave)
+                        channel = sound.play()
+                        # Wait for chord to finish or stop event
+                        while channel.get_busy():
+                            if self.stop_progression_event.is_set():
+                                channel.stop()
+                                break
+                            pygame.time.wait(10)
+                    else:
+                        self.master.after(0, lambda cn=chord_name: messagebox.showerror("Error", f"Chord '{cn}' not found."))
+                        self.master.after(0, self.on_progression_end)
+                        return
+        finally:
+            self.master.after(0, self.on_progression_end)
+
+    def on_progression_end(self):
+        self.is_playing_progression = False
+        self.progression_btn.config(text="Start Progression")
+        self.stop_progression_event.clear()
+        self.progression_thread = None
+
+    def add_to_custom_progression(self, chord_name):
+        if len(self.custom_progression) < 4:  # Adjusted limit to 4 chords
+            self.custom_progression.append(chord_name)
+            self.update_custom_progression_label()
+        else:
+            messagebox.showinfo("Info", "Custom progression can only have 4 chords.")
+
+    def update_custom_progression_label(self):
+        progression_text = "Custom Progression: " + ' - '.join(self.custom_progression)
+        self.custom_progression_label.config(text=progression_text)
+
+    def clear_custom_progression(self):
+        self.custom_progression = []
+        self.update_custom_progression_label()
 
 if __name__ == "__main__":
     root = tk.Tk()
